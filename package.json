@@ -14,6 +14,7 @@
     "express-handlebars": "^3.0.0",
     "express3-handlebars": "^0.5.2",
     "formidable": "^1.2.1",
+    "jquery-file-upload-middleware": "^0.1.8",
     "npm": "^6.0.1"
   },
   "devDependencies": {
