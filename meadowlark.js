@@ -7,16 +7,20 @@ var jqupload = require('jquery-file-upload-middleware');
 var credentials = require('./credentials.js');
 var carValidation = require('./lib/cartValidation.js');
 var nodemailer = require('nodemailer');
+var http = require('http');
 
 var app = express();
 
-var mailTransport = nodemailer.createTransport('SMTP', {
+var mailTransport = nodemailer.createTransport({
     service: 'Gmail',
     auth: {
       user: credentials.gmail.user,
       pass: credentials.gmail.password,
-    }
-});
+    },
+    secure:false,
+    tls: {rejectUnauthorized: false},
+    debug:true
+  });
 
 var hbs = exphbs.create({
   defaultLayout: 'main',
@@ -58,9 +62,18 @@ app.use(function(req, res, next){
   next();
 });
 
-app.use(require('./lib/requiresWaiver.js'));
-app.use(cartValidation.checkWaivers);
-app.use(cartValidation.chechGuestCounts);
+app.use('/upload', function(req, res, next){
+  var now = Date.now();
+  jqupload.fileHandler({
+    uploadDir: function(){
+      return __dirname + '/public/uploads' + now;
+    },
+    uploadUrl: function(){
+      return '/uploads' + now;
+    },
+  })(req,res,next);
+});
+
 // routes
 app.get('/', function(req, res){
   res.render('home');
@@ -103,18 +116,6 @@ app.post('/contest/vacation-photo/:year/:month', function(req,res){
   });
 });
 
-app.use('/upload', function(req, res, next){
-  var now = Date.now();
-  jqupload.fileHandler({
-    uploadDir: function(){
-      return __dirname + '/public/uploads' + now;
-    },
-    uploadUrl: function(){
-      return '/uploads' + now;
-    },
-  })(req,res,next);
-});
-
 app.post('/newsletter', function(req, res){
   var name = req.body.name || '', email = req.body.email || '';
   //input validation
@@ -127,6 +128,16 @@ app.post('/newsletter', function(req, res){
     };
     return res.redirect(303, '/newsletter/archive');
   }
+
+app.get('/fail', function(req,res){
+  throw new Error('Nope!');
+});
+
+app.get('epic-fail', function(req,res){
+  process.nextTick(function(){
+    throw new Error('Kaboom');
+  });
+});
 
   new NewsletterSignup({name: name, email: email}).save(function(err){
     if(err) {
@@ -148,15 +159,46 @@ app.post('/newsletter', function(req, res){
   });
 });
 
-mailTransport.sendMail({
-    from: '"Meadowlark Travel" <info@meadowlarktravel.com>',
-    to: 'steven.aguilar@stu.bmcc.cuny.edu',
-    subject: 'Your Meadowlark Travel Tour',
-    text: 'Thank you for booking your trip with Meadowlark Travel.  ' +
-                      'We look forward to your visit!',
-    }, function(err){
-            if(err) console.error('Unable to send email: ' + error);
+app.post('/cart/checkout', function(req, res){
+    var cart = req.session.cart;
+    if(!cart) next(new Error('Cart does not exist.'));
+    var name = req.body.name || '', email = req.body.email || ''; // input validation
+    if(!email.match(VALID_EMAIL_REGEX))
+    return res.next(new Error('Invalid email address.'));
+// assign a random cart ID; normally we would use a database ID here
+    cart.number = Math.random().toString().replace(/^0\.0*/, '');
+    cart.billing = {
+                    name: name,
+                    email: email,
+            };
+  res.render('email/cart-thank-you',
+        { layout: null, cart: cart }, function(err,html){
+        if( err ) console.log('error in email template'); mailTransport.sendMail({
+                                from: '"Meadowlark Travel": info@meadowlarktravel.com',
+                                to: cart.billing.email,
+                                subject: 'Thank You for Book your Trip with Meadowlark',
+                                html: html,
+                                generateTextFromHtml: true
+                              }, function(err){
+        if(err) console.error('Unable to send confirmation: ' + err.stack);
+        });
+      }
+    );
+        res.render('cart-thank-you', { cart: cart });
   });
+
+switch(app.get('env')){
+  case 'development':
+    //compact, colorful dev logging
+    app.use(require('morgan')('dev'));
+    break;
+  case 'production':
+     // module 'express-logger' supports daily log rotation
+     app.use(require('express-logger')({
+        path: __dirname + '/log/requests.log'
+     }));
+     break;
+}
 
 //custom 404 page
 app.use(function(req, res){
@@ -172,7 +214,16 @@ app.use(function(err, req, res, next){
   res.render('500');
 });
 
-app.listen(app.get('port'), function(){
-  console.log('Express started on http://localhost' +
-    app.get('port') + '; press ctrl-C to terminate');
-});
+function startServer(){
+  http.createServer(app).listen(app.get('port'), function(){
+    console.log('Express started in ' + app.get('env') + ' mode on http://localhost:' +
+                app.get('port') + '; press ctrl-c to terminate');
+  });
+}
+if(require.main === module){
+  //application run directly; start app server
+  startServer();
+} else {
+  // application imported as a module via "require": export function // to create server
+  module.exports = startServer;
+}

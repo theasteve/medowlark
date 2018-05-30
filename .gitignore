@@ -4,3 +4,4 @@ node_modules
 # such as .DS_Store (OSX), *.bak, etc.
 .DS_Store
 credentials.js
+.bash_profile
