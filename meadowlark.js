@@ -8,8 +8,17 @@ var credentials = require('./credentials.js');
 var carValidation = require('./lib/cartValidation.js');
 var nodemailer = require('nodemailer');
 var http = require('http');
+var dataDir = __dirname + '/data';
+var vacationPhotoDir = dataDir + '/vacation-photo';
+fs.exitsSync(dataDir) || fs.mkdirSync(dataDir);
+fs.exitsSync(vacationPhotoDir) || fs.mkdirSync(vacationPhotoDir);
+
 
 var app = express();
+
+function saveContestEntry(contestName, email, year, month, photoPath){
+    // TODO.. this will come later
+}
 
 var mailTransport = nodemailer.createTransport({
     service: 'Gmail',
@@ -32,6 +41,58 @@ var hbs = exphbs.create({
     }
   }
 });
+
+app.use(function(req, res, next){
+  // create a domain for this request
+  var domain = require('domain').create();
+  // handle errors on this domain
+  domain.on('error', function(err){
+    console.error('DOMAIN ERROR CAUGHT\n', err.stack);
+    try {
+      // failsafe shutdown in 5 seconds
+      setTimeout(function(){
+        console.error('Failsafe shutdown');
+        process.exit(1);
+      }, 5000);
+
+      // disconnect from the CLUSTER
+      var worker = require('cluster').worker;
+      if(worker) worker.disconnect();
+
+      // stop taking new requests
+      server.close();
+
+      try {
+        //attemp to use Express error route
+        next(err);
+      } catch(err){
+        //if express error route failed, try {
+        //plain Node response
+        console.error('Express error mechanism failed/n', err.stack);
+        res.statusCode = 500;
+        res.setHeader('content-type', 'text/plain');
+        res.end('Server error.');
+
+      }
+    } catch(err){
+      console.error('Unable to send 500 response.\n', err.stack);
+    }
+  });
+
+  // add the request and response objects to the domain
+  domain.add(req);
+  domain.add(res);
+
+  // execute the rest of the request chain in the domain
+  domain.run(next);
+});
+
+// other middleware and routes go here
+
+var server = http.createServer(app).listen(app.get('port'), function(){
+  console.log('Listen on port %d', app.get('port'));
+});
+
 
 app.engine('handlebars', hbs.engine);
 
@@ -107,12 +168,29 @@ app.get('/contest/vacation-photo', function(req,res){
 app.post('/contest/vacation-photo/:year/:month', function(req,res){
   var form = new formidable.IncomingForm();
   form.parse(req, function(err, fields, files){
-    if(err) return res.redirect(303, '/error')
-    console.log('received fields:');
-    console.log(fields);
-    console.log("received files:");
-    console.log(files);
-    res.redirect(303, '/thank-you')
+    if(err) return res.redirect(303, '/error');
+    if(err) {
+      res.session.flash = {
+        type: 'danger',
+        intro: 'Oops!',
+        message: 'There was an error processing your submission. ' +
+                  'Please try again'
+      };
+      return res.redirect(303, '/contest/vacation-photo');
+    }
+    var photo = files.photo;
+    var dir = vacationPhotoDir + '/' + Date.now();
+    var path = dir + '/' + photo.name;
+    fs.mkdirSync(dir);
+    fs.renameSync(photo.path, dir + '/' + photo.name);
+    saveContestEntry('vacation-photo', fields.email,
+                      req.params.year, req.params.month.path);
+    req.session.flash = {
+      type: 'success';
+      intro: 'Good Luck!',
+      message: 'You have been entered into the contest.',
+    };
+    return res.redirect(303, '/contest/vacation-photo/entries');
   });
 });
 
